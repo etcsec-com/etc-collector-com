@@ -1,0 +1,86 @@
+services:
+  etc-collector:
+    build:
+      context: .
+      # T_097: pin the built binary's own reported version to match the tag
+      # below, instead of silently carrying whatever main.go's in-source
+      # default is (see Dockerfile). Override at build time:
+      #   docker compose build --build-arg VERSION=3.2.0
+      args:
+        VERSION: ${ETC_COLLECTOR_VERSION:-dev}
+    # A published image DOES exist (docker.io/etcseccom/etc-collector — this
+    # file's old bare `etc-collector` name never pointed at it), but it's
+    # v3.1.38 "community" edition, several releases behind this checkout's
+    # source. Repointing this file at it would silently downgrade anyone
+    # building from a cloned repo, so this always builds from local source
+    # instead and never pulls. The tag below only names the image `build:`
+    # produces; ETC_COLLECTOR_VERSION lets a release process stamp the real
+    # version into both the tag and the binary (see `args` above) instead of
+    # the two silently drifting apart, without forcing a hardcoded number
+    # here that would go stale the moment the next release ships.
+    #
+    # One-line manual build, no compose needed:
+    #   docker build -t etc-collector:local .
+    image: etc-collector:${ETC_COLLECTOR_VERSION:-dev}
+    pull_policy: build
+    container_name: etc-collector
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./data:/app/data
+      - ./keys:/app/keys
+      # T_097: commented out by default — config.yaml doesn't ship in the
+      # repo, and mounting a host path that doesn't exist makes Docker
+      # silently create a DIRECTORY there instead, which then fails the
+      # container with a permission error that names neither this line nor
+      # config.yaml. The server starts fine with no config.yaml at all and
+      # lets you configure LDAP from the admin GUI afterward. To pre-seed it
+      # instead: `cp config.yaml.example config.yaml`, then uncomment below.
+      # - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - LOG_LEVEL=info
+      - LOG_FORMAT=json
+      # LDAP Configuration (override via env or config file)
+      - LDAP_URL=${LDAP_URL:-}
+      - LDAP_BIND_DN=${LDAP_BIND_DN:-}
+      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-}
+      - LDAP_BASE_DN=${LDAP_BASE_DN:-}
+      - LDAP_TLS_VERIFY=${LDAP_TLS_VERIFY:-true}
+    healthcheck:
+      # T_097: the container's own CMD (Dockerfile) binds --host 0.0.0.0,
+      # which requires TLS — a self-signed certificate is auto-provisioned.
+      # A plain http:// probe against it fails with "400 Bad Request" even
+      # though the server is healthy, so this must speak https:// too.
+      # --no-check-certificate is fine here: this check runs inside the same
+      # container as the server it's probing, nothing crosses the network.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--no-check-certificate", "--spider", "https://localhost:8443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Development services (optional)
+  # openldap:
+  #   image: osixia/openldap:1.5.0
+  #   container_name: openldap
+  #   ports:
+  #     - "389:389"
+  #     - "636:636"
+  #   environment:
+  #     LDAP_ORGANISATION: "Example Inc"
+  #     LDAP_DOMAIN: "example.com"
+  #     LDAP_ADMIN_PASSWORD: "admin"
+  #   volumes:
+  #     - ldap_data:/var/lib/ldap
+  #     - ldap_config:/etc/ldap/slapd.d
+
+volumes:
+  data:
+  keys:
+  # ldap_data:
+  # ldap_config:
+
+networks:
+  default:
+    name: etc-collector-network

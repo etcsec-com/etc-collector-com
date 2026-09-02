@@ -1,0 +1,43 @@
+# AD Vulnerability Catalog
+
+**Total: {{ .Total }} unique detections across {{ .CategoryCount }} categories** (collector v{{ .CollectorVersion }})
+
+> Generated from the Go detector registry by `make catalog`. Do not edit by
+> hand — every entry below is the `Doc()` return value of a registered
+> `audit.Detector`. To change a row, edit the corresponding detector's
+> `wrapFinding` / `types.Finding{}` call in
+> `public/internal/audit/detectors/ad/...` and re-run `go generate ./...`
+> followed by `make catalog`.
+
+## Summary by Category
+
+| Category | Count | Severity Distribution |
+|----------|-------|----------------------|
+{{- range .Categories }}
+| {{ .Name }} | {{ .Count }} | {{ .SeverityHistogram }} |
+{{- end }}
+
+---
+
+## Severity Weights (Scoring)
+
+| Severity | Weight | Score Impact |
+|----------|--------|--------------|
+| Critical | 10 | High |
+| High | 3 | Medium |
+| Medium | 1 | Low |
+| Low | 0.2 | Minimal |
+| Info | 0 | None |
+
+---
+
+## Complete Vulnerability List
+{{ range .Categories }}
+### {{ .Name }} ({{ .Count }})
+
+| # | Type | Severity | Weight | Title | Description | File |
+|---|------|----------|--------|-------|-------------|------|
+{{- range .Detectors }}
+| {{ .N }} | {{ .ID }} | {{ .Severity }} | {{ .Weight }} | {{ .Title }} | {{ .Description }} | {{ .SourceFile }} |
+{{- end }}
+{{ end }}

@@ -1,0 +1,701 @@
+/* ETC Collector — local stylesheet. Tailwind handles utilities; this file
+ * carries the design-token layer, the JS-rendered component classes, animations
+ * and the print stylesheet.
+ *
+ * T_016 FIDELITY PASS — values reproduced to the letter from the Etcsec
+ * Component Library reference (etcsec-design/etcsec-components.html, read via
+ * devtools). Its handoff rules drive everything here:
+ *   • Square everything — border-radius 0 on all containers; circles ONLY for
+ *     status dots & gauges.
+ *   • Hairline structure — 1px var(--line) borders carry the layout; shadows are
+ *     a last resort (none on cards).
+ *   • Mono for data — codes / IPs / metrics / timestamps in Geist Mono; big
+ *     display numbers in Space Grotesk; body in Geist.
+ *   • Semantic colour only — severity / verdict hues, never decorative.
+ */
+
+/* ── Self-hosted fonts (T_011) — variable woff2 under static/fonts/, no CDN. ──*/
+@font-face {
+  font-family: 'Geist';
+  src: url('/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('/fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('/fonts/SpaceGrotesk-Variable.woff2') format('woff2');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DESIGN TOKENS — the reference's exact CSS custom properties (measured).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* surfaces */
+  --bg: #faf9f5;          /* page background (cream) */
+  --panel: #ffffff;       /* cards / panels */
+  --bg-subtle: #f6f7f9;   /* alt sections, accordion headers */
+  --track: #eef0f3;       /* bar tracks, chip fills, count pills */
+  /* text */
+  --ink: #0d0f13;         /* primary text */
+  --muted: #5b6572;       /* secondary text */
+  --faint: #8a93a1;       /* tertiary / captions */
+  /* structure */
+  --line: #e6e8ec;        /* hairline borders (carry the layout) */
+  --line-strong: #d3d7dd; /* stronger divider */
+  /* brand */
+  --blue: #3165be;        /* primary / links / active */
+  --blue-ink: #2f5cae;    /* primary hover / on-tint text */
+  --blue-tint: rgba(49,101,190,.06);
+  --green: #58cb43;       /* pass / positive / live */
+  --green-ink: #2f8f22;
+  --green-soft: rgba(88,203,67,.1);
+  --green-line: rgba(88,203,67,.35);
+  /* severity (semantic only) */
+  --critical: #e5484d;
+  --high: #f2801f;
+  --medium: #eab308;
+  --low: #3165be;
+  --info: #5b6572;
+
+  /* JS-renderer aliases (kept so app.js colour lookups keep resolving) */
+  --sev-critical: var(--critical);
+  --sev-high: var(--high);
+  --sev-medium: var(--medium);
+  --sev-low: var(--low);
+  --sev-info: var(--info);
+  --status-passed: var(--green-ink);
+  --status-failed: var(--critical);
+  --status-manual: var(--blue);
+  --status-na: var(--faint);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * BASE
+ * ═══════════════════════════════════════════════════════════════════════════ */
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Geist', system-ui, -apple-system, sans-serif;
+}
+/* Big display numbers use Space Grotesk with tight tracking (reference). */
+h1, .font-display {
+  font-family: 'Space Grotesk', 'Geist', system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+/* Data always aligns: tabular figures for mono + explicit numeric cells. */
+.font-mono, .tabular-nums { font-variant-numeric: tabular-nums; }
+
+[x-cloak] { display: none !important; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SEVERITY / STATUS CHIPS — square, Geist Mono, tinted bg, semantic hue text.
+ * (Reference: no dot, uppercase, letter-spacing .06em, padding 2-3px 7-8px.)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.chip-sev, .chip-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 0;
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.chip-sev.critical { background: rgba(229,72,77,.1);  color: var(--critical); }
+.chip-sev.high     { background: rgba(242,128,31,.12); color: #c2560b; }
+.chip-sev.medium   { background: rgba(234,179,8,.15);  color: #8a6d00; }
+.chip-sev.low      { background: rgba(49,101,190,.1);  color: var(--blue); }
+.chip-sev.info     { background: var(--track);         color: var(--muted); }
+
+/* Verdict states (audit views) + job states (audits list / home) share the
+ * same four surfaces — grouped so each colour is declared exactly once. */
+.chip-status.passed,
+.chip-status.completed { background: var(--green-soft);  color: var(--green-ink); }
+.chip-status.failed    { background: rgba(229,72,77,.1); color: var(--critical); }
+.chip-status.manual,
+.chip-status.running   { background: var(--blue-tint);   color: var(--blue-ink); }
+.chip-status.pending   { background: rgba(234,179,8,.15); color: #8a6d00; }  /* = .chip-sev.medium */
+.chip-status.na        { background: var(--track);       color: var(--muted); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * BUTTONS — square; primary is the ink surface (near-black), not blue.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 0;
+  border: 1px solid transparent;
+  font-family: 'Geist', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s, color .15s;
+  white-space: nowrap;
+}
+.btn:disabled, .btn[disabled] { opacity: .5; cursor: not-allowed; }
+.btn-primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+.btn-primary:hover:not(:disabled) { background: #000; }
+.btn-ghost { background: var(--panel); color: var(--ink); border-color: var(--line); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--muted); }
+.btn-danger { background: var(--panel); color: var(--critical); border-color: rgba(229,72,77,.3); }
+.btn-danger:hover:not(:disabled) { background: rgba(229,72,77,.06); }
+.btn-sm { height: 28px; padding: 0 12px; font-size: 12px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * TAGS — framework / MITRE references. Square, hairline, mono, dense.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  padding: 2px 7px;
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: var(--bg-subtle);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tag-mitre { border-color: rgba(49,101,190,.25); background: var(--blue-tint); color: var(--blue-ink); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CARDS — hairline border, flat (no shadow), square.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ── KPI cell — mono/Space Grotesk value over a mono label ─────────────────── */
+.kpi { padding: 16px 18px; }
+.kpi-label {
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.kpi-value {
+  font-family: 'Space Grotesk', 'Geist', sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 26px;
+  letter-spacing: -.02em;
+  line-height: 1.1;
+  color: var(--ink);
+  margin-top: 4px;
+}
+.kpi-sub { font-size: 11px; color: var(--faint); margin-top: 2px; }
+
+/* ── Empty state ──────────────────────────────────────────────────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  padding: 40px 24px;
+  color: var(--faint);
+  font-size: 13px;
+}
+.empty-state .empty-title { font-size: 14px; font-weight: 600; color: var(--muted); }
+
+/* ── Loading skeleton — flat, square ──────────────────────────────────────── */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--track);
+  border-radius: 0;
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.65), transparent);
+  animation: skeletonShimmer 1.4s infinite;
+}
+@keyframes skeletonShimmer { 100% { transform: translateX(100%); } }
+
+/* ── Section eyebrow — mono uppercase label above a card group ─────────────── */
+.section-title {
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * STAT STRIP — a row of stat cells divided by hairlines (inside a .card).
+ * Values in Space Grotesk (display), labels in mono.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.stat-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+}
+.stat-strip > div {
+  padding: 11px 18px;
+  border-left: 1px solid var(--line);
+  min-width: 0;
+}
+.stat-strip > div:first-child { border-left: 0; }
+.stat-strip .s-val {
+  font-family: 'Space Grotesk', 'Geist', sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -.02em;
+  line-height: 1.15;
+  color: var(--ink);
+}
+.stat-strip .s-label {
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  margin-top: 3px;
+}
+@media (max-width: 640px) {
+  .stat-strip { grid-auto-flow: row; grid-auto-columns: unset; grid-template-columns: repeat(2, 1fr); }
+  .stat-strip > div { border-left: 0; border-top: 1px solid var(--line); }
+  .stat-strip > div:nth-child(-n+2) { border-top: 0; }
+}
+
+/* ── Meter — thin SQUARE progress bar on the track colour ──────────────────── */
+.meter {
+  height: 8px;
+  border-radius: 0;
+  background: var(--track);
+  overflow: hidden;
+}
+.meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 0;
+  background: var(--blue);
+  transition: width .8s cubic-bezier(.25,.46,.45,.94);
+}
+
+/* ── Segmented bar (framework controls) — square segments on the track ─────── */
+.segbar { display: flex; gap: 3px; flex-wrap: nowrap; }
+.segbar > span {
+  flex: 1;
+  height: 14px;
+  border-radius: 0;
+  background: var(--track);
+  transition: background-color 0.2s;
+}
+.segbar > span.pass { background: var(--green-ink); }
+.segbar > span.fail { background: var(--critical); }
+
+/* ── Filter chip — square facet pills with an active state ─────────────────── */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color .15s, background-color .15s, color .15s;
+  white-space: nowrap;
+}
+.filter-chip:hover { border-color: var(--muted); }
+.filter-chip.active { border-color: var(--blue); background: var(--blue-tint); color: var(--blue-ink); }
+.filter-chip .fc-count { font-variant-numeric: tabular-nums; opacity: .75; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DATA TABLE — hairline rows, mono header, dense, square.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table thead th {
+  text-align: left;
+  padding: 9px 14px;
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.data-table tbody td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table tbody tr:hover { background: var(--bg-subtle); }
+.data-table .mono {
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+/* ── Definition row (key/value) — infra policy cards ──────────────────────── */
+.def-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.def-row + .def-row { border-top: 1px solid var(--line); }
+.def-row dt { font-size: 12px; color: var(--muted); }
+.def-row dd {
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  color: var(--ink);
+}
+.def-row dd.ok  { color: var(--green-ink); }
+.def-row dd.bad { color: var(--critical); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * FINDINGS ACCORDION — square sections, hairline rows, mono codes/counts.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.acc-section { border: 1px solid var(--line); border-radius: 0; background: var(--panel); overflow: hidden; }
+.acc-section + .acc-section { margin-top: -1px; }   /* collapse doubled hairlines */
+.acc-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 18px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.acc-header:hover { background: var(--track); }
+.acc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.acc-row:hover { background: var(--bg-subtle); }
+.acc-row:last-child { border-bottom: none; }
+.acc-row .title { flex: 1; min-width: 0; font-weight: 600; color: var(--ink); }
+.acc-row .count {
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 0;
+  background: var(--track);
+}
+.acc-detail {
+  padding: 12px 18px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.acc-detail .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * T_015 — OPERATIONAL SHELL PRIMITIVES (home / audits / launch / import /
+ * provider config / settings). Same discipline as the rest of this file:
+ * every value below is either an existing token (var(--…)) or a value already
+ * declared above; the geometry comes from the Etcsec Component Library
+ * ("Page header", "Buttons full matrix", "Filter bar", "Empty state",
+ * "Alerts & warnings", "Audit row"). No new colour is introduced.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Page header — title block + right-aligned actions (reference: 20/22px
+ *    padding, Space Grotesk 24/700 title, 13px muted subtitle). ───────────── */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 20px 22px;
+}
+.page-title {
+  font-family: 'Space Grotesk', 'Geist', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--ink);
+}
+.page-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.page-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ── Card header — hairline-separated strip above a card body ──────────────── */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.card-foot {
+  padding: 10px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-subtle);
+}
+
+/* ── Segmented control — the reference filter bar's grouping, reused for the
+ *    top navigation. Hairline box, dividers between items, solid blue active. */
+.segmented { display: inline-flex; border: 1px solid var(--line); background: var(--panel); }
+.segmented > button {
+  padding: 7px 13px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  font-family: 'Geist', system-ui, sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .15s, color .15s;
+}
+.segmented > button:first-child { border-left: 0; }
+.segmented > button:hover:not(.active) { background: var(--bg-subtle); color: var(--ink); }
+.segmented > button.active { background: var(--blue); color: #fff; font-weight: 600; }
+
+/* ── Icon tile — square hairline frame. Replaces tinted/rounded icon chips. ── */
+.tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--blue);
+  flex-shrink: 0;
+}
+.tile-lg { width: 52px; height: 52px; }
+.tile-muted { color: var(--muted); }
+
+/* ── Status dot — one of the two places a circle is allowed (dots & gauges). ─ */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-sm { width: 6px; height: 6px; }
+.dot.ok   { background: var(--green); }
+.dot.bad  { background: var(--critical); }
+.dot.run  { background: var(--blue); }
+.dot.wait { background: var(--medium); }
+.dot.idle { background: var(--faint); }
+
+/* ── Form controls — square, hairline, focus = blue border (no glow ring). ─── */
+.field-label {
+  display: block;
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.field-hint {
+  font-family: 'Geist', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--faint);
+}
+.input, .select {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font-family: 'Geist', system-ui, sans-serif;
+  font-size: 13px;
+  outline: none;
+  transition: border-color .15s;
+}
+.input::placeholder { color: var(--faint); }
+.input:hover:not(:focus), .select:hover:not(:focus) { border-color: var(--line-strong); }
+.input:focus, .select:focus { border-color: var(--blue); }
+.input:disabled, .select:disabled { background: var(--bg-subtle); color: var(--faint); cursor: not-allowed; }
+.input-mono { font-family: 'Geist Mono', 'SF Mono', Menlo, monospace; font-size: 12.5px; }
+.check {
+  width: 14px;
+  height: 14px;
+  border-radius: 0;
+  accent-color: var(--blue);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* ── Alerts — hairline band, tinted surface, semantic hue on the title only.
+ *    (Reference "Alerts & warnings": 14/16px padding, 16px icon, 13/600 title
+ *    over a 12px muted body.) Every tint below already exists in this file,
+ *    except the warn border, which is the reference's measured value. ─────── */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.alert > svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+.alert .alert-title { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+.alert .alert-body { min-width: 0; }
+.alert-info { border-color: rgba(49,101,190,.25); background: var(--blue-tint); }
+.alert-info > svg, .alert-info .alert-title { color: var(--blue-ink); }
+.alert-ok   { border-color: var(--green-line); background: var(--green-soft); }
+.alert-ok > svg, .alert-ok .alert-title { color: var(--green-ink); }
+.alert-warn { border-color: rgba(234,179,8,.35); background: rgba(234,179,8,.15); }
+.alert-warn > svg, .alert-warn .alert-title { color: #8a6d00; }
+.alert-err  { border-color: rgba(229,72,77,.3); background: rgba(229,72,77,.06); }
+.alert-err > svg, .alert-err .alert-title { color: var(--critical); }
+
+/* ── Empty state, boxed variant — dashed frame on the alt surface ─────────── */
+.empty-state.boxed {
+  border: 1px dashed var(--line-strong);
+  background: var(--bg-subtle);
+  padding: 44px 24px;
+}
+.empty-state.boxed .empty-title {
+  font-family: 'Space Grotesk', 'Geist', system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.empty-state .tile { margin-bottom: 10px; }
+
+/* ── Drop zone — the empty-state frame made interactive (PingCastle import) ── */
+.dropzone {
+  display: block;
+  border: 1px dashed var(--line-strong);
+  background: var(--bg-subtle);
+  cursor: pointer;
+  transition: border-color .15s, background-color .15s;
+}
+.dropzone:hover { border-color: var(--blue); background: var(--blue-tint); }
+.dropzone-filled { border: 1px solid var(--line); background: var(--panel); }
+
+/* ── Stepper — squares, not circles: "circles ONLY for status dots & gauges" ─ */
+.stepper { display: flex; align-items: center; gap: 10px; }
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: background-color .2s, border-color .2s, color .2s;
+}
+.step-num.done    { background: var(--green-ink); border-color: var(--green-ink); color: #fff; }
+.step-num.current { background: var(--ink); border-color: var(--ink); color: #fff; }
+.step-label { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.step-label.current { color: var(--ink); }
+.step-rule { flex: 1; height: 1px; background: var(--line); }
+.step-rule.done { background: var(--green-line); }
+
+/* ── Inline link / code ───────────────────────────────────────────────────── */
+.link { color: var(--blue-ink); font-weight: 600; cursor: pointer; }
+.link:hover { text-decoration: underline; }
+.code {
+  font-family: 'Geist Mono', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  padding: 1px 5px;
+  background: var(--track);
+  color: var(--ink);
+}
+
+/* ── Action row — a full-width clickable list row (home "recent audits") ───── */
+.row-link {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  background: var(--panel);
+  transition: background-color .15s;
+}
+.row-link:last-child { border-bottom: 0; }
+.row-link:hover { background: var(--bg-subtle); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ANIMATIONS (unchanged behaviour from T_011/T_013)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.score-arc { transition: stroke-dashoffset 1.6s cubic-bezier(.25,.46,.45,.94), stroke 0.3s; }
+.step-card { animation: stepFadeIn 0.28s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes stepFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes spinGlow {
+  0%   { box-shadow: 0 0 0 0 rgba(49,101,190,0.20); }
+  50%  { box-shadow: 0 0 0 12px rgba(49,101,190,0.00); }
+  100% { box-shadow: 0 0 0 0 rgba(49,101,190,0.00); }
+}
+.spin-glow { animation: spinGlow 2.4s infinite; }
+
+/* Print stylesheet — opens the audit view as a saveable PDF via Cmd+P */
+@media print {
+  nav, footer { display: none !important; }
+  body { background: #fff !important; }
+  table { page-break-inside: avoid; }
+  .acc-section { page-break-inside: avoid; }
+}

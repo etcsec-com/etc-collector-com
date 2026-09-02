@@ -1,0 +1,48 @@
+# ETC Collector Configuration
+# ───────────────────────────
+# Copy this file to config.yaml and customize — or skip it entirely: the
+# server starts fine with no config.yaml at all and lets you configure LDAP
+# afterward from the admin GUI (http/https://localhost:8443).
+#
+#   cp config.yaml.example config.yaml
+#   nano config.yaml
+#
+# Environment variables also work, and win over this file:
+#   LDAP_URL, LDAP_BIND_DN, LDAP_BIND_PASSWORD, LDAP_BASE_DN
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+#   PORT, LOG_LEVEL
+
+server:
+  host: "0.0.0.0"
+  port: 8443
+
+# Active Directory (LDAP)
+ldap:
+  # url: "ldaps://dc.example.com:636"
+  # bindDN: "CN=svc-audit,CN=Users,DC=example,DC=com"
+  # bindPassword: "${LDAP_BIND_PASSWORD}"
+  # baseDN: "DC=example,DC=com"
+  tlsVerify: true
+  timeout: 30s
+  pageSize: 1000
+
+# Azure Entra ID
+# azure:
+#   tenantId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+#   clientId: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+#   clientSecret: "${AZURE_CLIENT_SECRET}"
+
+# JWT authentication (keys auto-generated on first start if missing)
+auth:
+  jwtPrivateKeyPath: "./keys/private.pem"
+  jwtPublicKeyPath: "./keys/public.pem"
+  tokenLifetime: 720h   # 30 days
+
+# Logging
+log:
+  level: "info"        # debug, info, warn, error
+  format: "console"    # console, json
+
+# Optional features
+features:
+  networkProbes: false  # DNS AXFR, ADCS HTTP probes

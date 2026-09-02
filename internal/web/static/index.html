@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ETC Collector — AD Security Audit</title>
+
+  <!-- Fonts are self-hosted under /fonts (@font-face in app.css): Geist (sans),
+       Geist Mono (data/numbers), Space Grotesk (display). No Google-Fonts CDN
+       link — the GUI must render with ZERO external request (offline/air-gapped
+       deployments). See T_011 (Etcsec Component Library port). -->
+
+  <!-- Tailwind Play CDN — Etcsec Component Library design tokens (T_016 fidelity
+       pass). Values measured from the reference's live render + handoff notes:
+       "Square everything (radius 0, circles only for dots/gauges); hairline 1px
+       borders carry layout, shadows are a last resort." -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            // EXACT reference tokens (--blue/--green/--ink/--muted/--line…). Token
+            // NAMES preserved so existing markup keeps working.
+            primary:  { DEFAULT: '#3165be', dark: '#2f5cae', darker: '#2854a5' },
+            success:  { DEFAULT: '#58cb43', dark: '#2f8f22' },
+            critical: '#e5484d',
+            high:     { DEFAULT: '#f2801f', dark: '#d9701a' },
+            medium:   { DEFAULT: '#eab308', light: '#eab308' },
+            low:      '#3165be',
+            info:     '#5b6572',
+            ink:      '#0d0f13',                               // --ink (was #1b2230)
+            muted:    { DEFAULT: '#5b6572', light: '#8a93a1' },// --muted / --faint
+            // Neutral ramp = reference greys so every slate-* utility maps to a
+            // real token (bg-subtle/track/line/line-strong/faint/muted/ink).
+            slate: {
+              50:  '#f6f7f9', 100: '#eef0f3', 200: '#e6e8ec', 300: '#d3d7dd',
+              400: '#8a93a1', 500: '#5b6572', 600: '#5b6572', 700: '#28323f',
+              800: '#0d0f13', 900: '#0d0f13',
+            },
+          },
+          fontFamily: {
+            sans:    ['Geist', 'system-ui', '-apple-system', 'sans-serif'],
+            mono:    ['Geist Mono', 'SF Mono', 'Menlo', 'Consolas', 'monospace'],
+            display: ['Space Grotesk', 'Geist', 'system-ui', 'sans-serif'],
+          },
+          boxShadow: {
+            // Reference rule: "shadows are a last resort" — hairline borders
+            // carry the layout, so EVERY elevation utility is flat.
+            soft: 'none', elev: 'none', card: 'none',
+            DEFAULT: 'none', sm: 'none', md: 'none', lg: 'none', xl: 'none', '2xl': 'none', inner: 'none',
+          },
+          borderRadius: {
+            // "Square everything · border-radius 0 on all containers; circles
+            // only for status dots & gauges." Every radius utility collapses to
+            // 0; only rounded-full stays round (dots, SVG gauges, avatars).
+            none: '0', sm: '0', DEFAULT: '0', md: '0', lg: '0',
+            xl: '0', '2xl': '0', '3xl': '0', full: '9999px',
+          },
+        },
+      },
+    }
+  </script>
+
+  <link rel="stylesheet" href="/app.css" />
+
+  <!-- Alpine.js — reactivity. Collapse plugin must load BEFORE the core
+       so the x-collapse directive is registered (used by the findings
+       accordion rows in app.js renderFindingsTab). -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.14.8/dist/cdn.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <!-- Chart.js — severity / categories / radar / accounts charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+</head>
+
+<body class="text-ink font-sans antialiased min-h-screen" x-data="app()" x-init="init()" x-cloak>
+
+  <!-- ════════ LOGIN GATE ════════ -->
+  <div x-show="!authenticated" class="min-h-screen grid place-items-center px-6">
+    <div class="card w-full max-w-md p-8">
+      <div class="flex items-center gap-3 mb-6">
+        <img src="/logo.png" alt="ETC" class="h-7" />
+        <span class="section-title">Collector</span>
+      </div>
+      <h1 class="text-2xl font-bold mb-1.5">Access required</h1>
+      <p class="text-sm text-muted mb-6">Enter the GUI access token issued by the operator.</p>
+      <label class="field-label" for="gui-access-token">Access token</label>
+      <input id="gui-access-token" type="password" x-model="loginToken" @keydown.enter="login()" placeholder="Paste the token issued by the operator" class="input input-mono" />
+      <p x-show="loginError" x-text="loginError" class="text-xs text-critical mt-2"></p>
+      <button @click="login()" :disabled="loginLoading" class="btn btn-primary w-full mt-4">
+        <span x-show="!loginLoading">Sign in</span>
+        <span x-show="loginLoading">Verifying…</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════ AUTHENTICATED SHELL ════════ -->
+  <div x-show="authenticated">
+
+    <!-- ──── NAVBAR — hairline bar, segmented view switcher (reference
+         "Filter bar" grouping). No blur, no tinted pills. ──── -->
+    <nav class="sticky top-0 z-40 bg-white border-b border-slate-200">
+      <div class="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3 shrink-0">
+          <img src="/logo.png" alt="ETC" class="h-6" />
+          <span class="section-title hidden sm:inline">Collector</span>
+          <span x-show="health.edition === 'pro'" class="tag tag-mitre">PRO</span>
+        </div>
+        <div class="segmented overflow-x-auto">
+          <template x-for="nav in NAV" :key="nav.id">
+            <button @click="setView(nav.id)" :class="view === nav.id ? 'active' : ''" x-text="nav.label"></button>
+          </template>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+          <span class="hidden md:inline-flex items-center gap-1.5 font-mono text-[11px] text-muted tabular-nums">
+            <span class="dot dot-sm" :class="health.status === 'ok' ? 'ok' : 'bad'"></span>
+            <span x-text="health.version || ''"></span>
+          </span>
+          <button @click="logout()" class="btn btn-ghost btn-sm">Sign out</button>
+        </div>
+      </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-6 py-8">
+
+      <!-- ════════ VIEW: HOME ════════ -->
+      <section x-show="view === 'home'" x-transition.opacity class="space-y-4">
+        <div class="card page-head">
+          <div>
+            <div class="page-title">Overview</div>
+            <div class="page-sub">Local collector status and recent audits.</div>
+          </div>
+          <div class="page-actions">
+            <button @click="setView('import')" class="btn btn-ghost">Import PingCastle</button>
+            <button @click="setView('launch')" class="btn btn-primary">Run a live audit</button>
+          </div>
+        </div>
+
+        <!-- Status KPIs — mono labels over display values (reference KPI cell) -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="card kpi">
+            <div class="flex items-center gap-2">
+              <span class="dot" :class="health.status === 'ok' ? 'ok' : 'bad'"></span>
+              <span class="kpi-label">Collector</span>
+            </div>
+            <div class="kpi-value" x-text="health.status === 'ok' ? 'Online' : 'Offline'"></div>
+            <div class="kpi-sub font-mono" x-text="'v' + (health.version || '?') + ' · ' + (health.edition || 'community')"></div>
+          </div>
+
+          <div class="card kpi">
+            <div class="flex items-center gap-2">
+              <span class="dot" :class="config.ldap?.configured ? 'ok' : 'wait'"></span>
+              <span class="kpi-label">Active Directory</span>
+            </div>
+            <div class="kpi-value" x-text="config.ldap?.configured ? 'Configured' : 'Not configured'"></div>
+            <div class="kpi-sub truncate" :class="config.ldap?.url ? 'font-mono' : ''" x-text="config.ldap?.url || 'Configure in Settings to start auditing'"></div>
+          </div>
+
+          <div class="card kpi">
+            <div class="flex items-center gap-2">
+              <span class="dot run"></span>
+              <span class="kpi-label">Audits</span>
+            </div>
+            <div class="kpi-value tabular-nums" x-text="jobs.length"></div>
+            <div class="kpi-sub" x-text="jobs.filter(j => j.status === 'completed').length + ' completed'"></div>
+          </div>
+        </div>
+
+        <!-- Two CTAs: Launch live audit / Import PingCastle -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <button @click="setView('launch')" class="card text-left p-5 flex items-start gap-4 hover:border-primary transition-colors">
+            <span class="tile">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/></svg>
+            </span>
+            <span class="min-w-0">
+              <span class="block font-display font-bold text-base">Run a live audit</span>
+              <span class="block text-sm text-muted mt-1">Connect to your AD via LDAP/LDAPS — read-only, 60–120 s.</span>
+            </span>
+          </button>
+
+          <button @click="setView('import')" class="card text-left p-5 flex items-start gap-4 hover:border-primary transition-colors">
+            <span class="tile">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 12V4m0 0l-4 4m4-4l4 4"/></svg>
+            </span>
+            <span class="min-w-0">
+              <span class="block font-display font-bold text-base">Import PingCastle XML</span>
+              <span class="block text-sm text-muted mt-1">Already ran PingCastle? Drop the <span class="code">ad_hc_*.xml</span> here.</span>
+            </span>
+          </button>
+        </div>
+
+        <!-- Recent audits -->
+        <div class="card">
+          <div class="card-head">
+            <h2 class="section-title">Recent audits</h2>
+            <button @click="setView('audits')" class="link text-xs">See all →</button>
+          </div>
+          <div x-show="jobs.length === 0" class="empty-state">
+            <span class="tile tile-muted">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.6a1 1 0 01.7.3l5.4 5.4a1 1 0 01.3.7V19a2 2 0 01-2 2z"/></svg>
+            </span>
+            <span class="empty-title">No audits yet</span>
+            <span>Run a live audit or import a PingCastle report to get started.</span>
+            <button @click="setView('launch')" class="btn btn-ghost btn-sm mt-3">Run your first audit</button>
+          </div>
+          <div x-show="jobs.length > 0">
+            <template x-for="job in jobs.slice(0, 5)" :key="job.id">
+              <button @click="openAudit(job.id)" class="row-link">
+                <span class="dot" :class="jobDot(job.status)"></span>
+                <span class="font-mono text-xs text-muted-light shrink-0" x-text="job.id.slice(0, 8)"></span>
+                <span class="tag shrink-0" x-text="jobTypeLabel(job.type)"></span>
+                <span class="chip-status shrink-0" :class="jobBadge(job.status)" x-text="job.status"></span>
+                <span class="ml-auto font-mono text-xs text-muted-light tabular-nums shrink-0" x-text="formatDate(job.createdAt)"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ VIEW: LAUNCH WIZARD ════════ -->
+      <section x-show="view === 'launch'" x-transition.opacity>
+        <div class="max-w-3xl mx-auto">
+          <div class="card page-head mb-5">
+            <div>
+              <div class="page-title">Run an audit</div>
+              <div class="page-sub">Read-only collection against your directory — nothing is written back.</div>
+            </div>
+            <div class="page-actions">
+              <button @click="setView('import')" class="btn btn-ghost btn-sm">Import a report instead</button>
+            </div>
+          </div>
+
+          <!-- Stepper — square markers (circles are reserved for status dots) -->
+          <div class="stepper mb-6">
+            <template x-for="(s, i) in WIZARD_STEPS" :key="s.id">
+              <div class="flex items-center gap-2.5 flex-1">
+                <div class="step-num" :class="wizardStepIdx() > i ? 'done' : wizardStepIdx() === i ? 'current' : ''">
+                  <svg x-show="wizardStepIdx() > i" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                  <span x-show="wizardStepIdx() <= i" x-text="i + 1"></span>
+                </div>
+                <div class="step-label hidden sm:block" :class="wizardStepIdx() === i ? 'current' : ''" x-text="s.label"></div>
+                <div x-show="i < WIZARD_STEPS.length - 1" class="step-rule" :class="wizardStepIdx() > i ? 'done' : ''"></div>
+              </div>
+            </template>
+          </div>
+
+          <!-- Error banner — suppressed on the dedicated error step, which
+               already renders wizardError in full. -->
+          <div x-show="wizardError && wizardStep !== 'error'" class="alert alert-err mb-4">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            <div class="alert-body flex-1">
+              <div class="alert-title">Something went wrong</div>
+              <div x-text="wizardError"></div>
+            </div>
+            <button @click="wizardError = ''" class="text-critical shrink-0 leading-none" aria-label="Dismiss">×</button>
+          </div>
+
+          <!-- Step: provider -->
+          <div x-show="wizardStep === 'provider'" class="card p-7 step-card">
+            <div class="flex items-center gap-3 mb-5">
+              <span class="tile">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12l5 5L20 7"/></svg>
+              </span>
+              <h2 class="font-display text-xl font-bold">What would you like to audit?</h2>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <button @click="pickProvider('ad')" class="card p-5 text-left hover:border-primary transition-colors">
+                <span class="tile mb-3">
+                  <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12V7a2 2 0 012-2h10a2 2 0 012 2v5M5 12v5a2 2 0 002 2h10a2 2 0 002-2v-5M5 12h14"/></svg>
+                </span>
+                <span class="block font-display font-bold">Active Directory</span>
+                <span class="block text-sm text-muted mt-1">On-prem AD via LDAP/LDAPS</span>
+              </button>
+              <button disabled class="card p-5 text-left bg-slate-50 opacity-60 cursor-not-allowed">
+                <span class="tile tile-muted mb-3">
+                  <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
+                </span>
+                <span class="block font-display font-bold">Microsoft Entra ID</span>
+                <span class="block text-sm text-muted mt-1">Coming in a future release</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Step: config (AD only) — provider credentials form. The endpoints
+               behind testConnection() / saveConfigAndAudit() are untouched
+               (saas jurisdiction); only the control styling changes here. -->
+          <div x-show="wizardStep === 'config'" class="card p-7 step-card">
+            <div class="flex items-center gap-3 mb-5">
+              <span class="tile">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/></svg>
+              </span>
+              <h2 class="font-display text-xl font-bold">Active Directory connection</h2>
+            </div>
+
+            <div class="space-y-4">
+              <div>
+                <label class="field-label">Domain controller URL <span class="field-hint">ldaps://dc.example.com or ldap://…</span></label>
+                <input x-model="adCfg.url" placeholder="ldaps://dc01.lab.local:636" class="input input-mono" />
+              </div>
+              <div>
+                <label class="field-label">Base DN</label>
+                <input x-model="adCfg.baseDN" placeholder="DC=lab,DC=local" class="input input-mono" />
+              </div>
+              <div>
+                <label class="field-label">Bind DN <span class="field-hint">read-only service account</span></label>
+                <input x-model="adCfg.bindDN" placeholder="CN=svc-audit,OU=Service,DC=lab,DC=local" class="input input-mono" />
+              </div>
+              <div>
+                <label class="field-label">Password</label>
+                <input type="password" x-model="adCfg.bindPassword" class="input input-mono" />
+              </div>
+              <label class="flex items-center gap-2.5 text-sm cursor-pointer">
+                <input type="checkbox" x-model="adCfg.tlsVerify" class="check" />
+                <span>Verify TLS certificate <span class="field-hint">recommended for production</span></span>
+              </label>
+
+              <div x-show="connTestResult" class="alert" :class="connTestResult?.success ? 'alert-ok' : 'alert-err'">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" :d="connTestResult?.success ? 'M5 13l4 4L19 7' : 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'"/></svg>
+                <div class="alert-body">
+                  <div class="alert-title" x-text="connTestResult?.success ? 'Connection OK' : 'Connection failed'"></div>
+                  <div class="font-mono" x-text="connTestResult?.message"></div>
+                </div>
+              </div>
+
+              <div class="flex gap-2.5 pt-1">
+                <button @click="setStep('provider')" class="btn btn-ghost">Back</button>
+                <button @click="testConnection()" :disabled="!adCfg.url || !adCfg.bindDN || !adCfg.bindPassword || !adCfg.baseDN || connTesting" class="btn btn-ghost">
+                  <span x-show="!connTesting">Test connection</span>
+                  <span x-show="connTesting">Testing…</span>
+                </button>
+                <button @click="saveConfigAndAudit()" :disabled="!connTestResult?.success || auditStarting" class="btn btn-primary ml-auto">
+                  <span x-show="!auditStarting">Save & run audit →</span>
+                  <span x-show="auditStarting">Starting…</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step: audit running -->
+          <div x-show="wizardStep === 'audit'" class="card p-7 step-card">
+            <div class="flex items-center gap-3 mb-5">
+              <span class="tile">
+                <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              </span>
+              <h2 class="font-display text-xl font-bold">Running the audit</h2>
+            </div>
+            <p class="text-sm text-muted mb-4">Scanning your directory. This usually takes 1–2 minutes.</p>
+            <div class="meter mb-3">
+              <i :style="`width: ${wizardProgress}%`"></i>
+            </div>
+            <div class="flex items-center justify-between text-xs text-muted">
+              <span>Status <span class="font-mono font-semibold text-ink" x-text="wizardJobStatus"></span></span>
+              <span class="font-mono tabular-nums" x-text="wizardElapsedLabel"></span>
+            </div>
+          </div>
+
+          <!-- Step: done -->
+          <div x-show="wizardStep === 'done'" class="card p-7 step-card">
+            <div class="flex items-center gap-3 mb-5">
+              <span class="tile" style="color: var(--green-ink)">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.4"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+              </span>
+              <h2 class="font-display text-xl font-bold">Audit complete</h2>
+            </div>
+            <div id="score-reveal-host" class="flex flex-col items-center gap-6 py-4"></div>
+          </div>
+
+          <!-- Step: error -->
+          <div x-show="wizardStep === 'error'" class="card p-7 step-card">
+            <div class="flex items-center gap-3 mb-4">
+              <span class="tile" style="color: var(--critical)">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </span>
+              <h2 class="font-display text-xl font-bold">Audit failed</h2>
+            </div>
+            <pre class="font-mono text-xs whitespace-pre-wrap break-words border border-slate-200 bg-slate-50 p-4 mb-4" style="color: var(--critical)" x-text="wizardError || 'Unknown error.'"></pre>
+            <div class="flex gap-2.5">
+              <button @click="setStep('config')" class="btn btn-primary">Edit credentials & retry</button>
+              <button @click="resetWizard()" class="btn btn-ghost">Start over</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ VIEW: IMPORT PINGCASTLE ════════ -->
+      <section x-show="view === 'import'" x-transition.opacity>
+        <div class="max-w-3xl mx-auto">
+          <div class="card page-head mb-5">
+            <div>
+              <div class="page-title">Import PingCastle</div>
+              <div class="page-sub">
+                Drop your <span class="code">ad_hc_*.xml</span> report.
+                Optionally add the HTML report for affected entity lists.
+              </div>
+            </div>
+            <div class="page-actions">
+              <button @click="setView('launch')" class="btn btn-ghost btn-sm">Run a live audit instead</button>
+            </div>
+          </div>
+
+          <div class="card p-7">
+            <div x-show="!pcCapabilityChecked" class="text-sm text-muted">Checking collector capability…</div>
+
+            <div x-show="pcCapabilityChecked && !pcSupported" class="alert alert-warn">
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M10.3 4L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 4a2 2 0 00-3.4 0zM12 9v4M12 17h.01"/></svg>
+              <div class="alert-body">
+                <div class="alert-title">PingCastle import requires collector ≥ 3.1.22</div>
+                <div>Your collector is <span class="font-mono" x-text="health.version"></span>. Upgrade or use the live audit flow.</div>
+              </div>
+            </div>
+
+            <div x-show="pcCapabilityChecked && pcSupported" class="space-y-3">
+              <!-- Live debug panel — open it and screenshot to me if a picker
+                   doesn't open. Reveals pcSupported / pcXmlFile / pcHtmlFile /
+                   lastPcEvent so we can pinpoint click-chain issues without DevTools. -->
+              <details class="text-xs text-muted-light">
+                <summary class="cursor-pointer select-none">▸ Debug info (open if picker doesn't work)</summary>
+                <pre class="mt-2 p-3 bg-slate-50 border border-slate-200 font-mono text-[11px] whitespace-pre-wrap break-all" x-text="JSON.stringify({pcCapabilityChecked, pcSupported, pcXmlFile: pcXmlFile ? {name: pcXmlFile.name, size: pcXmlFile.size, type: pcXmlFile.type} : null, pcHtmlFile: pcHtmlFile ? {name: pcHtmlFile.name, size: pcHtmlFile.size, type: pcHtmlFile.type} : null, wizardError, lastPcEvent, healthVersion: health.version}, null, 2)"></pre>
+              </details>
+
+              <!-- ── XML report (required) ─────────────────────────────────── -->
+              <!-- Transparent input overlay pattern: input is absolutely positioned
+                   over the whole drop zone with opacity:0. Any click is a direct
+                   user gesture on the file input → Chrome always opens the OS picker. -->
+              <!-- Native <label for=> + sr-only input. The dev's previous transparent
+                   overlay (input absolute opacity:0) worked in Firefox but Chrome
+                   silently refused the picker — opacity:0 creates its own stacking
+                   context and Chrome treats clicks differently. The label/for pattern
+                   is the only reliable cross-browser way: clicking the label is
+                   treated as a direct user gesture on the input → picker opens. -->
+              <label x-show="!pcXmlFile" for="pc-xml-input" @drop.prevent="onPcDrop($event, 'xml')" @dragover.prevent="" @dragenter.prevent="" class="dropzone">
+                <input id="pc-xml-input" type="file" accept=".xml,application/xml,text/xml" x-ref="pcXml" @change="onPcXmlPick($event)" class="sr-only" />
+                <div class="p-4 flex items-center gap-3">
+                  <span class="tile tile-muted">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zM14 2v6h6M9 13l3 3m0 0l3-3m-3 3V9"/></svg>
+                  </span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold">XML report <span class="text-critical">*</span></div>
+                    <div class="text-xs text-muted-light">Click or drag <span class="code">ad_hc_*.xml</span> here · up to 50 MB</div>
+                  </div>
+                  <span class="link text-xs shrink-0">Browse →</span>
+                </div>
+              </label>
+              <div x-show="pcXmlFile" class="dropzone-filled">
+                <div class="p-4 flex items-center gap-3">
+                  <span class="tile">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zM14 2v6h6M9 13l3 3m0 0l3-3m-3 3V9"/></svg>
+                  </span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold truncate" x-text="pcXmlFile?.name"></div>
+                    <div class="font-mono text-xs text-muted-light tabular-nums" x-text="pcXmlFile ? formatBytes(pcXmlFile.size) : ''"></div>
+                  </div>
+                  <button type="button" @click="pcXmlFile = null; wizardError = ''" class="text-muted hover:text-ink shrink-0 text-lg leading-none px-1" aria-label="Remove XML">×</button>
+                </div>
+              </div>
+
+              <!-- ── HTML report (optional) ────────────────────────────────── -->
+              <label x-show="!pcHtmlFile" for="pc-html-input" @drop.prevent="onPcDrop($event, 'html')" @dragover.prevent="" @dragenter.prevent="" class="dropzone">
+                <input id="pc-html-input" type="file" accept=".html,.htm,text/html" x-ref="pcHtml" @change="onPcHtmlPick($event)" class="sr-only" />
+                <div class="p-4 flex items-center gap-3">
+                  <span class="tile tile-muted">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                  </span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold">HTML report <span class="field-hint">optional</span></div>
+                    <div class="text-xs text-muted-light">Adds affected entity lists to findings</div>
+                  </div>
+                  <span class="link text-xs shrink-0">Browse →</span>
+                </div>
+              </label>
+              <div x-show="pcHtmlFile" class="dropzone-filled">
+                <div class="p-4 flex items-center gap-3">
+                  <span class="tile">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                  </span>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold truncate" x-text="pcHtmlFile?.name"></div>
+                    <div class="font-mono text-xs text-muted-light tabular-nums" x-text="pcHtmlFile ? formatBytes(pcHtmlFile.size) : ''"></div>
+                  </div>
+                  <button type="button" @click="pcHtmlFile = null; wizardError = ''" class="text-muted hover:text-ink shrink-0 text-lg leading-none px-1" aria-label="Remove HTML">×</button>
+                </div>
+              </div>
+
+              <!-- Status -->
+              <div x-show="pcImporting" class="alert alert-info">
+                <svg class="animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                <div class="alert-body">
+                  <div class="alert-title">Import in progress</div>
+                  <div x-text="pcImportingLabel || 'Uploading…'"></div>
+                </div>
+              </div>
+
+              <div x-show="wizardError" class="alert alert-err">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <div class="alert-body">
+                  <div class="alert-title">Import failed</div>
+                  <div x-text="wizardError"></div>
+                </div>
+              </div>
+
+              <button @click="importPingCastle()" :disabled="!pcXmlFile || pcImporting" class="btn btn-primary">
+                Import & view report
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ VIEW: AUDITS LIST ════════ -->
+      <section x-show="view === 'audits'" x-transition.opacity class="space-y-4">
+        <div class="card page-head">
+          <div>
+            <div class="page-title">Audits</div>
+            <div class="page-sub">All audit jobs run by this collector.</div>
+          </div>
+          <div class="page-actions">
+            <button @click="setView('import')" class="btn btn-ghost">Import PingCastle</button>
+            <button @click="setView('launch')" class="btn btn-primary">New audit</button>
+          </div>
+        </div>
+
+        <div class="card" x-show="jobs.length > 0">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th class="text-right"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="job in jobs" :key="job.id">
+                <tr class="cursor-pointer" @click="openAudit(job.id)">
+                  <td class="mono text-muted-light" x-text="job.id.slice(0, 8)"></td>
+                  <td><span class="tag" x-text="jobTypeLabel(job.type)"></span></td>
+                  <td>
+                    <span class="chip-status" :class="jobBadge(job.status)">
+                      <span class="dot dot-sm" :class="jobDot(job.status)"></span>
+                      <span x-text="job.status"></span>
+                    </span>
+                  </td>
+                  <td class="mono text-muted" x-text="formatDate(job.createdAt)"></td>
+                  <td class="mono text-muted" x-text="jobDuration(job)"></td>
+                  <td class="text-right"><span class="link text-xs">View →</span></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
+        <div x-show="jobs.length === 0" class="empty-state boxed">
+          <span class="tile tile-lg">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.6a1 1 0 01.7.3l5.4 5.4a1 1 0 01.3.7V19a2 2 0 01-2 2z"/></svg>
+          </span>
+          <span class="empty-title">No audits yet</span>
+          <span>Run a live audit against your directory, or import an existing PingCastle report.</span>
+          <div class="flex gap-2.5 mt-4">
+            <button @click="setView('launch')" class="btn btn-primary btn-sm">Run a live audit</button>
+            <button @click="setView('import')" class="btn btn-ghost btn-sm">Import PingCastle</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ VIEW: AUDIT VIEW ════════ -->
+      <section x-show="view === 'view-audit'" x-transition.opacity>
+        <div x-show="!auditData" class="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-muted">
+          <svg class="w-6 h-6 mx-auto animate-spin text-primary mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          Loading audit…
+        </div>
+
+        <div x-show="auditData">
+          <!-- Audit header -->
+          <div class="mb-5 flex items-center gap-3">
+            <button @click="setView('audits')" class="text-muted hover:text-ink text-sm flex items-center gap-1">← Audits</button>
+            <span class="text-muted-light">/</span>
+            <span class="font-mono text-xs text-muted" x-text="currentAuditId?.slice(0, 8)"></span>
+            <span class="text-muted-light">·</span>
+            <span class="text-xs text-muted" x-text="auditMetaLine()"></span>
+            <button @click="downloadAuditJSON()" class="ml-auto text-xs font-semibold text-primary hover:underline flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              Export JSON
+            </button>
+          </div>
+
+          <!-- Tabs -->
+          <div class="flex items-center gap-1 mb-5 border-b border-slate-200">
+            <template x-for="t in AUDIT_TABS" :key="t.id">
+              <button @click="auditTab = t.id" :class="auditTab === t.id ? 'text-primary border-primary' : 'text-muted hover:text-ink border-transparent'" class="px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors">
+                <span x-text="t.label"></span>
+              </button>
+            </template>
+          </div>
+
+          <!-- Tab panes — populated by app.js renderXxx() functions injecting innerHTML into these hosts -->
+          <div x-show="auditTab === 'executive'" id="audit-tab-executive" class="space-y-5"></div>
+          <div x-show="auditTab === 'findings'" id="audit-tab-findings" class="space-y-5"></div>
+          <div x-show="auditTab === 'infra'" id="audit-tab-infra" class="space-y-5"></div>
+          <div x-show="auditTab === 'anssi'" id="audit-tab-anssi" class="space-y-5"></div>
+          <div x-show="auditTab === 'frameworks'" id="audit-tab-frameworks" class="space-y-5"></div>
+        </div>
+      </section>
+
+      <!-- ════════ VIEW: SETTINGS ════════ -->
+      <section x-show="view === 'settings'" x-transition.opacity>
+        <div class="max-w-4xl mx-auto space-y-4">
+          <div class="card page-head">
+            <div>
+              <div class="page-title">Settings</div>
+              <div class="page-sub">Provider configuration and API tokens.</div>
+            </div>
+          </div>
+
+          <!-- Provider config — LDAP / Active Directory. Endpoints unchanged
+               (testLDAP/saveLDAP/deleteLDAP hit internal/api admin routes). -->
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <div class="font-display text-base font-bold">Active Directory</div>
+                <div class="text-xs text-muted mt-0.5">Default credentials used for new audits.</div>
+              </div>
+              <span x-show="config.ldap?.configured" class="chip-status passed">Configured</span>
+            </div>
+            <div class="p-6 space-y-4">
+              <div>
+                <label class="field-label">URL</label>
+                <input x-model="ldapForm.url" placeholder="ldaps://dc.example.com:636" class="input input-mono" />
+              </div>
+              <div>
+                <label class="field-label">Base DN</label>
+                <input x-model="ldapForm.baseDN" placeholder="DC=example,DC=com" class="input input-mono" />
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label class="field-label">Bind DN</label>
+                  <input x-model="ldapForm.bindDN" placeholder="CN=svc,DC=example,DC=com" class="input input-mono" />
+                </div>
+                <div>
+                  <label class="field-label">Password</label>
+                  <input type="password" x-model="ldapForm.bindPassword" class="input input-mono" />
+                </div>
+              </div>
+              <label class="flex items-center gap-2.5 text-sm cursor-pointer">
+                <input type="checkbox" :checked="ldapForm.tlsVerify === 'true'" @change="ldapForm.tlsVerify = $event.target.checked ? 'true' : 'false'" class="check" />
+                <span>Verify TLS certificate</span>
+              </label>
+
+              <div x-show="ldapMsg" class="alert" :class="ldapMsgOk ? 'alert-ok' : 'alert-err'">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" :d="ldapMsgOk ? 'M5 13l4 4L19 7' : 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'"/></svg>
+                <div class="alert-body" x-text="ldapMsg"></div>
+              </div>
+
+              <div class="flex gap-2.5 pt-1">
+                <button @click="testLDAP()" :disabled="ldapLoading || !ldapForm.url" class="btn btn-ghost">Test</button>
+                <button @click="saveLDAP()" :disabled="ldapLoading || !ldapForm.url" class="btn btn-primary">Save</button>
+                <button x-show="config.ldap?.configured" @click="deleteLDAP()" class="btn btn-danger ml-auto">Remove</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- API tokens -->
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <div class="font-display text-base font-bold">API tokens</div>
+                <div class="text-xs text-muted mt-0.5">Generate tokens for programmatic API access.</div>
+              </div>
+            </div>
+            <div class="p-6">
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label class="field-label">Service name</label>
+                  <input x-model="tokenForm.service" placeholder="my-integration" class="input" />
+                </div>
+                <div>
+                  <label class="field-label">Duration</label>
+                  <select x-model="tokenForm.duration" class="select">
+                    <option value="1h">1 hour</option>
+                    <option value="24h">24 hours</option>
+                    <option value="168h">7 days</option>
+                    <option value="720h">30 days</option>
+                    <option value="8760h">1 year</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="field-label">Max uses</label>
+                  <input type="number" x-model.number="tokenForm.maxUses" placeholder="0 = unlimited" min="0" class="input input-mono" />
+                </div>
+              </div>
+              <button @click="generateToken()" :disabled="!tokenForm.service" class="btn btn-primary mt-4">Generate token</button>
+
+              <div x-show="generatedToken" class="alert alert-ok mt-4">
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                <div class="alert-body min-w-0">
+                  <div class="alert-title">Token generated — save it now, you won't see it again.</div>
+                  <pre class="font-mono text-xs break-all whitespace-pre-wrap select-all mt-1.5 text-ink" x-text="generatedToken"></pre>
+                  <div class="mt-2 flex items-center gap-3">
+                    <button @click="navigator.clipboard.writeText(generatedToken)" class="link text-xs">Copy</button>
+                    <span class="text-xs text-muted">Expires <span x-text="tokenExpiry" class="font-mono font-semibold"></span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer with SaaS upsell -->
+    <footer class="mt-12 border-t border-slate-200 bg-white">
+      <div class="max-w-7xl mx-auto px-6 py-4 text-center text-[11px] text-muted-light">
+        Point-in-time audit — for continuous monitoring, multi-site fleet management and NIS2 / GDPR / HDS compliance:
+        <a href="https://etcsec.com/?utm_source=collector&utm_medium=gui_footer&utm_campaign=v3.1" target="_blank" rel="noopener" class="link ml-1">etcsec.com →</a>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

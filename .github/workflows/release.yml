@@ -1,0 +1,440 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # Fail-closed gate. Runs before anything is built so a release that cannot be
+  # signed dies in seconds rather than after ~12 minutes of cross-compilation.
+  #
+  # `secrets` is NOT an available context in a step-level `if:`, which is why the
+  # old gate smuggled the secret through a step-level `env:` and then skipped the
+  # signing step whenever it was empty — a green build that published an unsigned
+  # binary. Job-level `env:` is the documented place where `secrets` resolves,
+  # and the guard below fails instead of skipping.
+  #
+  # This must stay behaviourally identical to the private repo's
+  # .github/workflows/release.yml. scripts/test-signing-guard.sh asserts it.
+  signing-preflight:
+    name: "🔏 Preflight — release signing"
+    runs-on: ubuntu-latest
+    env:
+      CODE_SIGN_PFX: ${{ secrets.CODE_SIGN_PFX }}
+      CODE_SIGN_PASSWORD: ${{ secrets.CODE_SIGN_PASSWORD }}
+      ALLOW_UNSIGNED_RELEASE: ${{ vars.ALLOW_UNSIGNED_RELEASE }}
+    outputs:
+      mode: ${{ steps.guard.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Signing guard (signed, or the release fails)
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ ! -f ./scripts/lib/signing.sh ]; then
+            echo "::error title=Release signing::scripts/lib/signing.sh is missing. It is synced from the private repo by scripts/sync-public.sh — run that sync before tagging a release. Refusing to publish unsigned."
+            exit 1
+          fi
+          ./scripts/lib/signing.sh preflight "Community release"
+
+  tests:
+    name: "🧪 Run Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Run tests
+        run: go test -v -race ./...
+
+  build-windows:
+    name: "🪟 Build Windows (amd64)"
+    needs: [tests, signing-preflight]
+    runs-on: ubuntu-latest
+    env:
+      CODE_SIGN_PFX: ${{ secrets.CODE_SIGN_PFX }}
+      CODE_SIGN_PASSWORD: ${{ secrets.CODE_SIGN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build Windows binary
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          LDFLAGS="-s -w -X main.Version=${VERSION#v} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
+
+          mkdir -p dist
+          go build -trimpath -ldflags="${LDFLAGS}" \
+            -o dist/etc-collector-windows-amd64.exe \
+            ./cmd/etc-collector
+
+      # Gated on the preflight's decision, not on secret presence. When the mode
+      # is "signed" this step MUST succeed — it materialises the PKCS#12 bundle
+      # to a real file (osslsigncode -pkcs12 takes a path, not the secret's
+      # contents), signs, and then verifies that a signature is actually there.
+      - name: Sign Windows binary (Authenticode)
+        if: needs.signing-preflight.outputs.mode == 'signed'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y osslsigncode
+
+          . ./scripts/lib/signing.sh
+
+          PFX="${RUNNER_TEMP}/codesign.pfx"
+          trap 'signing_shred "$PFX"' EXIT
+
+          signing_materialize_pfx "$PFX"
+          signing_sign_windows dist/etc-collector-windows-amd64.exe "$PFX"
+
+      - name: Mark build as deliberately unsigned
+        if: needs.signing-preflight.outputs.mode != 'signed'
+        run: |
+          echo "::warning title=Release signing::Windows binary published UNSIGNED (ALLOW_UNSIGNED_RELEASE is set)."
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: dist/etc-collector-windows-amd64.exe
+
+  build-linux-amd64:
+    name: "🐧 Build Linux (amd64)"
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build Linux amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          LDFLAGS="-s -w -X main.Version=${VERSION#v} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
+
+          mkdir -p dist
+          go build -trimpath -ldflags="${LDFLAGS}" \
+            -o dist/etc-collector-linux-amd64 \
+            ./cmd/etc-collector
+
+      - name: Upload Linux amd64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64
+          path: dist/etc-collector-linux-amd64
+
+  build-linux-arm64:
+    name: "🐧 Build Linux (arm64)"
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build Linux arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          LDFLAGS="-s -w -X main.Version=${VERSION#v} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
+
+          mkdir -p dist
+          go build -trimpath -ldflags="${LDFLAGS}" \
+            -o dist/etc-collector-linux-arm64 \
+            ./cmd/etc-collector
+
+      - name: Upload Linux arm64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: dist/etc-collector-linux-arm64
+
+  build-macos-amd64:
+    name: "🍎 Build macOS (amd64)"
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build macOS amd64
+        env:
+          GOOS: darwin
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          LDFLAGS="-s -w -X main.Version=${VERSION#v} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
+
+          mkdir -p dist
+          go build -trimpath -ldflags="${LDFLAGS}" \
+            -o dist/etc-collector-darwin-amd64 \
+            ./cmd/etc-collector
+
+      - name: Upload macOS amd64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-amd64
+          path: dist/etc-collector-darwin-amd64
+
+  build-macos-arm64:
+    name: "🍎 Build macOS (arm64 - Apple Silicon)"
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build macOS arm64
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          LDFLAGS="-s -w -X main.Version=${VERSION#v} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
+
+          mkdir -p dist
+          go build -trimpath -ldflags="${LDFLAGS}" \
+            -o dist/etc-collector-darwin-arm64 \
+            ./cmd/etc-collector
+
+      - name: Upload macOS arm64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-arm64
+          path: dist/etc-collector-darwin-arm64
+
+  create-release:
+    name: "📦 Create GitHub Release"
+    needs: [signing-preflight, build-windows, build-linux-amd64, build-linux-arm64, build-macos-amd64, build-macos-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Required for cosign keyless signing (Sigstore/Fulcio via GitHub OIDC).
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release directory structure
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          RELEASE_VERSION=${VERSION#v}
+
+          mkdir -p dist/release
+
+          # Windows
+          mkdir -p dist/etc-collector-${RELEASE_VERSION}-windows-amd64
+          cp artifacts/windows-amd64/etc-collector-windows-amd64.exe dist/etc-collector-${RELEASE_VERSION}-windows-amd64/etc-collector.exe
+          cd dist && zip -r release/etc-collector-${RELEASE_VERSION}-windows-amd64.zip etc-collector-${RELEASE_VERSION}-windows-amd64 && cd ..
+
+          # Linux amd64
+          mkdir -p dist/etc-collector-${RELEASE_VERSION}-linux-amd64
+          cp artifacts/linux-amd64/etc-collector-linux-amd64 dist/etc-collector-${RELEASE_VERSION}-linux-amd64/etc-collector
+          cd dist && tar czf release/etc-collector-${RELEASE_VERSION}-linux-amd64.tar.gz etc-collector-${RELEASE_VERSION}-linux-amd64 && cd ..
+
+          # Linux arm64
+          mkdir -p dist/etc-collector-${RELEASE_VERSION}-linux-arm64
+          cp artifacts/linux-arm64/etc-collector-linux-arm64 dist/etc-collector-${RELEASE_VERSION}-linux-arm64/etc-collector
+          cd dist && tar czf release/etc-collector-${RELEASE_VERSION}-linux-arm64.tar.gz etc-collector-${RELEASE_VERSION}-linux-arm64 && cd ..
+
+          # macOS amd64
+          mkdir -p dist/etc-collector-${RELEASE_VERSION}-darwin-amd64
+          cp artifacts/darwin-amd64/etc-collector-darwin-amd64 dist/etc-collector-${RELEASE_VERSION}-darwin-amd64/etc-collector
+          cd dist && tar czf release/etc-collector-${RELEASE_VERSION}-darwin-amd64.tar.gz etc-collector-${RELEASE_VERSION}-darwin-amd64 && cd ..
+
+          # macOS arm64
+          mkdir -p dist/etc-collector-${RELEASE_VERSION}-darwin-arm64
+          cp artifacts/darwin-arm64/etc-collector-darwin-arm64 dist/etc-collector-${RELEASE_VERSION}-darwin-arm64/etc-collector
+          cd dist && tar czf release/etc-collector-${RELEASE_VERSION}-darwin-arm64.tar.gz etc-collector-${RELEASE_VERSION}-darwin-arm64 && cd ..
+
+      - name: Generate checksums
+        run: |
+          cd dist/release
+          sha256sum *.tar.gz *.zip > checksums.sha256
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # checksums.sha256 travels over the same channel as the artifacts, so by
+      # itself it proves nothing against a compromised mirror. This detached
+      # Sigstore signature is verifiable independently of the download channel.
+      # Keyless signing uses the job's OIDC token — no pre-provisioned secret,
+      # so this works today whether or not the Authenticode cert exists yet.
+      - name: Sign checksums (detached, Sigstore keyless)
+        run: |
+          set -euo pipefail
+          . ./scripts/lib/signing.sh
+          signing_sign_checksums dist/release/checksums.sha256
+
+      - name: Mark release as deliberately unsigned
+        if: needs.signing-preflight.outputs.mode != 'signed'
+        run: |
+          set -euo pipefail
+          . ./scripts/lib/signing.sh
+          signing_write_unsigned_marker dist/release
+
+      - name: Generate latest.json
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          RELEASE_VERSION=${VERSION#v}
+
+          cat > dist/release/latest.json << EOF
+          {
+            "version": "${RELEASE_VERSION}",
+            "date": "$(date -u +%Y-%m-%d)",
+            "checksums": "https://get.etcsec.com/downloads/checksums.sha256",
+            "checksums_bundle": "https://get.etcsec.com/downloads/checksums.sha256.bundle",
+            "downloads": {
+              "linux-amd64": "https://get.etcsec.com/downloads/etc-collector-${RELEASE_VERSION}-linux-amd64.tar.gz",
+              "linux-arm64": "https://get.etcsec.com/downloads/etc-collector-${RELEASE_VERSION}-linux-arm64.tar.gz",
+              "windows-amd64": "https://get.etcsec.com/downloads/etc-collector-${RELEASE_VERSION}-windows-amd64.zip",
+              "darwin-amd64": "https://get.etcsec.com/downloads/etc-collector-${RELEASE_VERSION}-darwin-amd64.tar.gz",
+              "darwin-arm64": "https://get.etcsec.com/downloads/etc-collector-${RELEASE_VERSION}-darwin-arm64.tar.gz"
+            }
+          }
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/release/*.tar.gz
+            dist/release/*.zip
+            dist/release/checksums.sha256
+            dist/release/checksums.sha256.bundle
+            dist/release/latest.json
+            dist/release/UNSIGNED*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-release:
+    name: "🐳 Docker Release"
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # GHCR_TOKEN, pas GITHUB_TOKEN. Le jeton automatique du workflow s'est
+          # vu refuser le push avec « permission_denied: read_package » sur
+          # ghcr.io/etcsec-com/etc-collector — le paquet existe deja et n'est pas
+          # rattache a ce depot, ce que le jeton ephemere ne peut pas outrepasser.
+          # Un secret GHCR_TOKEN dedie est provisionne depuis avril, et le
+          # workflow ne l'utilisait pas. Repli sur GITHUB_TOKEN s'il manque.
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/etcsec-com/etc-collector
+            etcseccom/etc-collector
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push to both registries
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # Sans ce build-arg, le Dockerfile retombe sur `ARG VERSION=dev` et
+          # l'image publiee repond « etc-collector version dev ». Constate sur
+          # la v3.2.0 : l'image se telechargeait et tournait, mais mentait sur
+          # sa propre version. Le tag git est la seule source correcte ici.
+          # steps.meta.outputs.version rend la semver SANS le prefixe « v »
+          # (github.ref_name vaudrait « v3.2.0 »), ce qui correspond a ce que
+          # le binaire annonce partout ailleurs.
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

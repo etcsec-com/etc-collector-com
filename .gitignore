@@ -1,0 +1,54 @@
+# Binaries
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+# Local go build output (produced by `go build ./...` in public/)
+# ELARGI le 2026-09-02 : la regle etait `/etc-collector`, un chemin EXACT. Un agent avait
+# produit `public/etc-collector-pro` (180 Mo) en construisant avec le tag d'edition, et ce
+# binaire n'etait PAS ignore — un `git add -A` l'aurait mis dans l'historique, de facon
+# irreversible. Aucun fichier suivi a la racine de public/ ne commence par ce prefixe,
+# donc l'etoile ne masque rien.
+/etc-collector*
+
+# Test binary
+*.test
+
+# Coverage
+coverage.out
+coverage.html
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build cache
+.cache/
+
+# Debug
+__debug_bin*
+
+# Environment
+.env
+.env.local
+*.env
+
+# Config with secrets
+config.yaml
+config.local.yaml
+
+# Data directory
+data/
+keys/

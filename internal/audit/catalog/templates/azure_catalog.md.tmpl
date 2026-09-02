@@ -1,0 +1,27 @@
+# Azure Entra ID Security Detectors - Vulnerability Catalog
+
+Total Detectors: **{{ .Total }}** (collector v{{ .CollectorVersion }})
+
+> Generated from the Go detector registry by `make catalog`. Do not edit by
+> hand — every entry below is the `Doc()` return value of a registered
+> `audit.Detector`. To change a row, edit the corresponding detector's
+> `wrapFinding` / `types.Finding{}` call in
+> `public/internal/audit/detectors/azure/...` and re-run `go generate ./...`
+> followed by `make catalog`.
+
+## Summary by Category
+
+| Category | Count |
+|----------|-------|
+{{- range .Categories }}
+| {{ .Name }} | {{ .Count }} |
+{{- end }}
+{{ range .Categories }}
+## {{ .Name }} ({{ .Count }})
+
+| # | Type | Severity | Weight | Title | Description | File |
+|---|------|----------|--------|-------|-------------|------|
+{{- range .Detectors }}
+| {{ .N }} | {{ .ID }} | {{ .Severity }} | {{ .Weight }} | {{ .Title }} | {{ .Description }} | {{ .SourceFile }} |
+{{- end }}
+{{ end }}
