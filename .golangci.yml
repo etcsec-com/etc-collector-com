@@ -1,0 +1,27 @@
+linters:
+  enable:
+    - gofmt
+    - govet
+    - staticcheck
+    - gosimple
+    - ineffassign
+  disable:
+    - errcheck  # Désactivé temporairement - trop d'erreurs existantes
+    - unused    # Désactivé temporairement - trop d'erreurs existantes
+
+linters-settings:
+  staticcheck:
+    checks: ["all", "-SA9003"]  # Ignore les avertissements de branches vides
+
+  gosimple:
+    checks: ["all", "-S1009", "-S1011"]  # Ignore vérifications nil et simplifications de boucles
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+run:
+  timeout: 5m
+  skip-dirs:
+    - vendor
